@@ -4,8 +4,10 @@ import os
 import os.path as osp
 import sys
 import time
+import pdb
 import cPickle
 import argparse
+from glob import glob
 
 import torch
 import torch.nn as nn
@@ -27,11 +29,11 @@ class vrd_module():
 
     def __init__(self):
         self.args = EasyDict()
-        self.args.dataset = 'vrd'    
+        self.args.dataset = 'vrd'
         self.args.use_so = True
         self.args.use_obj = True
         self.args.no_obj_prior = True
-        self.args.loc_type = 0                
+        self.args.loc_type = 0
         self.args.num_relations = 70
         self.args.num_classes = 100 # add background
         with open('data/vrd/so_prior.pkl', 'rb') as fid:
@@ -48,11 +50,15 @@ class vrd_module():
         if osp.isfile(model_path):
             print("=> loading model '{}'".format(model_path))
             checkpoint = torch.load(model_path)
-            self.net.load_state_dict(checkpoint['state_dict'])        
+            self.net.load_state_dict(checkpoint['state_dict'])
         else:
             print "=> no model found at '{}'".format(args.resume)
-        
+
     def relation_im(self, im_path, res):
+        # pdb.set_trace()
+        # draw detection image
+        self.plot_detection_res(im_path, res)
+
         boxes_img = res['box']
         pred_cls_img = np.array(res['cls'])
         pred_confs = np.array(res['confs'])
@@ -63,9 +69,9 @@ class vrd_module():
         PIXEL_MEANS = np.array([[[102.9801, 115.9465, 122.7717]]])
         image_blob, im_scale = prep_im_for_blob(im, PIXEL_MEANS)
         blob = np.zeros((1,)+image_blob.shape, dtype=np.float32)
-        blob[0] = image_blob        
+        blob[0] = image_blob
         # Reshape net's input blobs
-        boxes = np.zeros((boxes_img.shape[0], 5))        
+        boxes = np.zeros((boxes_img.shape[0], 5))
         boxes[:, 1:5] = boxes_img * im_scale
         classes = pred_cls_img
         ix1 = []
@@ -87,21 +93,21 @@ class vrd_module():
                 rel_boxes[i_rel_inst, 1:5] = np.array(rBBox) * im_scale
                 SpatialFea[i_rel_inst] = self.getRelativeLoc(sBBox, oBBox)
                 rel_so_prior[i_rel_inst] = self.so_prior[classes[s_idx], classes[o_idx]]
-                i_rel_inst += 1    
+                i_rel_inst += 1
         boxes = boxes.astype(np.float32, copy=False)
-        classes = classes.astype(np.float32, copy=False) 
+        classes = classes.astype(np.float32, copy=False)
         ix1 = np.array(ix1)
-        ix2 = np.array(ix2)    
+        ix2 = np.array(ix2)
         obj_score, rel_score = self.net(blob, boxes, rel_boxes, SpatialFea, classes, ix1, ix2, self.args)
         rel_prob = rel_score.data.cpu().numpy()
-        rel_prob += np.log(0.5*(rel_so_prior+1.0/self.args.num_relations))        
+        rel_prob += np.log(0.5*(rel_so_prior+1.0/self.args.num_relations))
         rlp_labels_im  = np.zeros((rel_prob.shape[0]*rel_prob.shape[1], 5), dtype = np.int)
         tuple_confs_im = []
         n_idx = 0
         for tuple_idx in range(rel_prob.shape[0]):
-            sub = ix1[tuple_idx]            
-            obj = ix2[tuple_idx]            
-            for rel in range(rel_prob.shape[1]):                
+            sub = ix1[tuple_idx]
+            obj = ix2[tuple_idx]
+            for rel in range(rel_prob.shape[1]):
                 conf = rel_prob[tuple_idx, rel]
                 rlp_labels_im[n_idx] = [classes[sub], sub, rel, classes[obj], obj]
                 tuple_confs_im.append(conf)
@@ -111,12 +117,21 @@ class vrd_module():
         rlp_labels_im = rlp_labels_im[idx_order,:]
         tuple_confs_im = tuple_confs_im[idx_order]
         vrd_res = []
+
+        # save test image + vrd res
+        im_name = im_path.split('/')[-1]
+        im_name = im_name[:-4]
+        f = open('test/' + im_name + '.txt', 'w')
+
         for tuple_idx in range(rlp_labels_im.shape[0]):
             label_tuple = rlp_labels_im[tuple_idx]
             sub_cls = self.vrd_classes[label_tuple[0]]
             obj_cls = self.vrd_classes[label_tuple[3]]
             rel_cls = self.vrd_rels[label_tuple[2]]
-            vrd_res.append(('%s%d-%s-%s%d'%(sub_cls, label_tuple[1], rel_cls, obj_cls, label_tuple[4]), tuple_confs_im[tuple_idx]))        
+            vrd_res.append(('%s%d-%s-%s%d'%(sub_cls, label_tuple[1], rel_cls, obj_cls, label_tuple[4]), tuple_confs_im[tuple_idx]))
+            f.write(sub_cls + ',' + rel_cls + ',' + obj_cls + '\n')
+        f.close()
+
         print vrd_res
         time2 = time.time()
         print "TEST Time:%s" % (time.strftime('%H:%M:%S', time.gmtime(int(time2 - time1))))
@@ -127,7 +142,7 @@ class vrd_module():
                 max(0, min(aBB[1], bBB[1]) - margin), \
                 min(iw, max(aBB[2], bBB[2]) + margin), \
                 min(ih, max(aBB[3], bBB[3]) + margin)]
-        
+
     def getRelativeLoc(self, aBB, bBB):
         sx1, sy1, sx2, sy2 = aBB.astype(np.float32)
         ox1, oy1, ox2, oy2 = bBB.astype(np.float32)
@@ -136,13 +151,23 @@ class vrd_module():
         wh = np.log(np.array([sw/ow, sh/oh, ow/sw, oh/sh]))
         return np.hstack((xy, wh))
 
+    def plot_detection_res(self, im_path, det_res):
+        im_name = im_path.split('/')[-1]
+        im_name = im_name[:-4]
+        img = cv2.imread(im_path)
+        for i in range(len(det_res['box'])):
+            bbox = det_res['box'][i]
+            cv2.rectangle(img, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 255, 0), 2)
+            cv2.putText(img, self.vrd_classes[det_res['cls'][i]], (max(0,int(bbox[0])-5), int(bbox[1])), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.imwrite('test/'+im_name+'.jpg', img)
+
 def pre_demo():
     vrdet = vrd_module()
 
     with open('data/vrd/test.pkl', 'rb') as fid:
         anno = cPickle.load(fid)
 
-    with open('data/vrd/proposal.pkl', 'rb') as fid:   
+    with open('data/vrd/proposal.pkl', 'rb') as fid:
         proposals = cPickle.load(fid)
 
     anno_img = anno[0]
@@ -151,7 +176,7 @@ def pre_demo():
     res = {}
     res['box'] = proposals['boxes'][0]
     res['cls'] = proposals['cls'][0]
-    res['confs'] = proposals['confs'][0]        
+    res['confs'] = proposals['confs'][0]
     print vrdet.relation_im(im_path, res)
 
 def vrd_demo():
@@ -161,8 +186,27 @@ def vrd_demo():
     vrdet = vrd_module()
     det_res = det.det_im(im_path)
     vrd_res = vrdet.relation_im(im_path, det_res)
-    print vrd_res
+    # print vrd_res
+
+def vrd_demo_test_all():
+    from detector import detector
+    # build models
+    det = detector()
+    vrdet = vrd_module()
+
+    # load all test image path
+    img_paths = glob('data/sg_dataset/sg_test_images/*.jpg')
+    # pdb.set_trace()
+    # img_test_save_path = 'test/'
+
+    # test each image
+    for im_path in img_paths:
+        det_res = det.det_im(im_path)
+        vrd_res = vrdet.relation_im(im_path, det_res)
+        print('finish testing' + im_path)
+
 
 if __name__ == '__main__':
-    vrd_demo() 
+    # vrd_demo()
+    vrd_demo_test_all()
     #from IPython import embed; embed()
