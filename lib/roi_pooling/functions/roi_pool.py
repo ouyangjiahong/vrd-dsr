@@ -1,4 +1,5 @@
 import torch
+import pdb
 from torch.autograd import Function
 from .._ext import roi_pooling
 
@@ -27,6 +28,7 @@ class RoIPoolFunction(Function):
         else:
             output = output.cuda()
             argmax = argmax.cuda()
+            # pdb.set_trace()
             roi_pooling.roi_pooling_forward_cuda(self.pooled_height, self.pooled_width, self.spatial_scale,
                                                  features, rois, output, argmax)
             self.output = output

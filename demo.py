@@ -58,6 +58,8 @@ class vrd_module():
         # pdb.set_trace()
         # draw detection image
         self.plot_detection_res(im_path, res)
+        im_name = im_path.split('/')[-1]
+        im_name = im_name[:-4]
 
         boxes_img = res['box']
         pred_cls_img = np.array(res['cls'])
@@ -94,10 +96,18 @@ class vrd_module():
                 SpatialFea[i_rel_inst] = self.getRelativeLoc(sBBox, oBBox)
                 rel_so_prior[i_rel_inst] = self.so_prior[classes[s_idx], classes[o_idx]]
                 i_rel_inst += 1
+
+        if i_rel_inst == 0:
+            # no relationship, return, or cause error
+            f = open('test/' + im_name + '.txt', 'w')
+            f.close()
+            return
+
         boxes = boxes.astype(np.float32, copy=False)
         classes = classes.astype(np.float32, copy=False)
         ix1 = np.array(ix1)
         ix2 = np.array(ix2)
+        # pdb.set_trace()
         obj_score, rel_score = self.net(blob, boxes, rel_boxes, SpatialFea, classes, ix1, ix2, self.args)
         rel_prob = rel_score.data.cpu().numpy()
         rel_prob += np.log(0.5*(rel_so_prior+1.0/self.args.num_relations))
@@ -119,8 +129,6 @@ class vrd_module():
         vrd_res = []
 
         # save test image + vrd res
-        im_name = im_path.split('/')[-1]
-        im_name = im_name[:-4]
         f = open('test/' + im_name + '.txt', 'w')
 
         for tuple_idx in range(rlp_labels_im.shape[0]):
@@ -196,14 +204,16 @@ def vrd_demo_test_all():
 
     # load all test image path
     img_paths = glob('data/sg_dataset/sg_test_images/*.jpg')
+    img_paths.sort()
     # pdb.set_trace()
     # img_test_save_path = 'test/'
 
     # test each image
     for im_path in img_paths:
+        print('start testing ' + im_path)
         det_res = det.det_im(im_path)
         vrd_res = vrdet.relation_im(im_path, det_res)
-        print('finish testing' + im_path)
+        print('finish testing ' + im_path)
 
 
 if __name__ == '__main__':
